@@ -13,9 +13,9 @@
             "request": "launch",
             "type": "cortex-debug",
             "runToEntryPoint": "main",
-            "servertype": "external",
+            "servertype": "external", // Change this is your devboard is not remotely accessible
             "device": "samv71q21",
-            "gdbTarget": "192.168.2.240:3333",
+            "gdbTarget": "PUT IP:PORT OF REMOTE OPENOCD INSTANCE HERE",
             "svdPath": "${workspaceFolder}/arch/cortex-m/samv71-hal/samv71q21/ATSAMV71Q21B.svd",
             "postLaunchCommands": [
                 "set print asm-demangle on",
