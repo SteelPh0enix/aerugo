@@ -7,6 +7,7 @@ pub use self::error::InitError;
 use aerugo_hal::system_hal::SystemHal;
 use bare_metal::CriticalSection;
 use env_parser::read_env;
+use samv71_hal::peripherals;
 
 use crate::api::{InitApi, RuntimeApi, SystemApi};
 use crate::boolean_condition::{BooleanConditionSet, BooleanConditionStorage};
@@ -21,7 +22,7 @@ use crate::task::TaskId;
 use crate::tasklet::{StepFn, TaskletHandle, TaskletPtr, TaskletStorage};
 
 /// Core system.
-pub static AERUGO: Aerugo = Aerugo::new();
+pub static AERUGO: Aerugo = Aerugo::new(Peripherals::new());
 
 /// System scheduler.
 static EXECUTOR: Executor = Executor::new();
@@ -38,9 +39,7 @@ impl Aerugo {
     pub(crate) const TASKLET_COUNT: usize = 0;
 
     /// Creates new system instance.
-    const fn new() -> Self {
-        let peripherals = Peripherals {};
-
+    const fn new(peripherals: Peripherals) -> Self {
         Aerugo {
             hal: Hal::new(peripherals),
         }

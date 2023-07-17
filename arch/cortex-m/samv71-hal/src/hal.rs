@@ -4,6 +4,7 @@ use aerugo_hal::system_hal::{SystemHal, SystemHardwareConfig};
 use bare_metal::CriticalSection;
 
 use crate::peripherals::Peripherals;
+use embedded_hal::watchdog::Watchdog;
 
 /// HAL implementation for Cortex-M SAMV71.
 pub struct Hal {
@@ -36,7 +37,7 @@ impl SystemHal for Hal {
     }
 
     fn feed_watchdog(&mut self) {
-        todo!()
+        self._peripherals.watchdog.feed();
     }
 
     fn enter_critical() {
