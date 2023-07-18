@@ -22,7 +22,7 @@ use crate::task::TaskId;
 use crate::tasklet::{StepFn, TaskletHandle, TaskletPtr, TaskletStorage};
 
 /// Core system.
-pub static AERUGO: Aerugo = Aerugo::new();
+pub static AERUGO: Aerugo = Aerugo::new(Peripherals::new());
 
 /// System scheduler.
 static EXECUTOR: Executor = Executor::new();
