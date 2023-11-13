@@ -6,6 +6,7 @@ local socket are provided."""
 
 from __future__ import annotations
 
+import logging
 import select
 import socket
 import time
@@ -104,6 +105,7 @@ class RemoteUARTConnection:
         Returns `True` if UART connection has been established, `False` if UART is already open or
         if connection cannot be established."""
         if self._is_open:
+            logging.error("Remote UART connection tried to be opened while already being opened")
             return False
 
         socket_location = (
@@ -118,6 +120,8 @@ class RemoteUARTConnection:
         self._uart_socket = socket.socket()
         self._uart_socket.setblocking(False)
 
+        logging.info(f"Opening UART socket to remote sockat instance @ {socket_location}")
+
         def check_connection_status() -> bool:
             # We just created a new socket, so `cast` here is appropriate, as it cannot be None
             return cast(socket.socket, self._uart_socket).connect_ex(socket_location) == 0
@@ -126,19 +130,25 @@ class RemoteUARTConnection:
             self._is_open = True
             return True
 
+        logging.info("Remote UART connection opened!")
+
         return False
 
     def close_uart(self: RemoteUARTConnection) -> bool:
         """Closes socat connection and UART port on remote.
         Returns `True` if connection has been closed, `False` if UART is not open."""
         if not self._is_open or self._uart_socket is None:
+            logging.error("Remote UART connection tried to be closed while already being closed")
             return False
 
+        logging.info("Closing remote UART connection...")
         if self._uart_socket is not None:
+            logging.info("Shutting down socat socket...")
             self._uart_socket.shutdown(socket.SHUT_RDWR)
             self._uart_socket.close()
             self._uart_socket = None
         self._close_socat_bridge()
+        logging.info("Remote UART connection closed!")
 
         self._is_open = False
         return True
@@ -152,9 +162,11 @@ class RemoteUARTConnection:
         Returns a tuple. First element is always present and indicates how many bytes have been
         sent. Second element is present only on error, and indicates what went wrong."""
         if (not self._is_open) or (self._uart_socket is None):
+            logging.debug("write_bytes called while UART is closed!")
             return 0, UARTError.UART_IS_CLOSED
 
         if timeout_seconds < 0:
+            logging.debug(f"Invalid timeout ({timeout_seconds}s) passed to write_bytes!")
             return 0, UARTError.INVALID_TIMEOUT
 
         start_time = time.time()
@@ -165,6 +177,7 @@ class RemoteUARTConnection:
             _, writable, _ = select.select([], [self._uart_socket], [], timeout_seconds)
 
             if writable:
+                logging.debug(f"Sending {data!r} via sockat bridge to UART...")
                 if (sent := self._uart_socket.send(data)) <= 0:
                     raise BrokenSocketError(when="trying to send data")
                 sent_bytes_sum += sent
@@ -196,12 +209,15 @@ class RemoteUARTConnection:
         Returns new data immediately when available.
         Returns `UARTError` on timeout or invalid arguments."""
         if (not self._is_open) or (self._uart_socket is None):
+            logging.debug("read_bytes called while UART is closed!")
             return Err(UARTError.UART_IS_CLOSED)
 
         if timeout_seconds < 0:
+            logging.debug(f"Invalid timeout ({timeout_seconds}s) passed to read_bytes!")
             return Err(UARTError.INVALID_TIMEOUT)
 
         if maximum_length <= 0:
+            logging.debug(f"Invalid maximum length ({maximum_length}B) passed to read_bytes!")
             return Err(UARTError.INVALID_LENGTH)
 
         # First, let's try checking if there's any new data from UART in non-blocking fashion.
@@ -212,13 +228,20 @@ class RemoteUARTConnection:
         # unexpected error that should be handled by the user.
         read_to_buffer_result = self._read_bytes_to_internal_buffer_non_blocking(maximum_length)
         if read_to_buffer_result.is_err:
+            logging.debug(
+                "read_bytes: Error while reading data into internal buffer: "
+                f"{read_to_buffer_result}",
+            )
             return Err(read_to_buffer_result.unwrap_err())
 
         if len(buffered_data := self._take_internal_buffer_content()) > 0:
+            logging.debug(f"read_bytes: Fetched {buffered_data!r} from internal buffer")
             return Ok(buffered_data)
 
         # If internal RX buffer is empty, we can safely fetch new data directly from socket.
-        return self._read_bytes_from_socket(timeout_seconds, maximum_length)
+        read_bytes = self._read_bytes_from_socket(timeout_seconds, maximum_length)
+        logging.debug(f"read_bytes: Fetched {read_bytes!r} directly from socket")
+        return read_bytes
 
     def read_exact_bytes(
         self: RemoteUARTConnection,
@@ -235,10 +258,15 @@ class RemoteUARTConnection:
             read_bytes_result = self.read_bytes(timeout_seconds, remaining_bytes)
             if read_bytes_result.is_err:
                 # Propagate any hard error
+                logging.debug(
+                    f"Error happened while reading exactly {length} bytes from socket: "
+                    f"{read_bytes_result}",
+                )
                 return Err(read_bytes_result.unwrap_err())
 
             read_bytes.extend(read_bytes_result.unwrap())
 
+        logging.debug(f"read_exact_bytes: Read {read_bytes!r} directly from socket")
         return Ok(bytes(read_bytes))
 
     def read_string(
@@ -252,23 +280,24 @@ class RemoteUARTConnection:
         Returns `Err(UARTError)` on invalid arguments or timeout.
         May throw an exception if received string (decoded after receiving all the bytes) is not a
         valid UTF-8 string."""
-        # Similarly to `read_bytes`, fetch any data that's immediately available into internal
+        # Similarly to `read_bytes`, read any data that's immediately available into internal
         # buffer, and return if it fails (timeout is silenced in non-blocking function).
         buffer_read_result = self._read_bytes_to_internal_buffer_non_blocking(maximum_length)
         if buffer_read_result.is_err:
+            logging.debug(
+                f"read_string: Error while reading data into internal buffer: "
+                f"{buffer_read_result}",
+            )
             return Err(buffer_read_result.unwrap_err())
 
         if (terminator_index := self._rx_buffer.find(terminator)) >= 0:
-            return Ok(
-                self._take_bytes_out_of_rx_buffer(terminator_index + len(terminator)).decode(
-                    "UTF-8",
-                ),
-            )
+            taken_data = self._take_bytes_out_of_rx_buffer(terminator_index + len(terminator))
+            logging.debug(f"read_string: Taken {taken_data!r} out of internal buffer at first try")
+            return Ok(taken_data.decode("UTF-8"))
 
         # If a valid string isn't yet available in the buffer, try to read it again, but in
         # blocking mode. Repeat until timeout is hit to make sure that data in chunks is
         # received correctly.
-
         while (
             buffer_read_result := self._read_bytes_to_internal_buffer(
                 timeout_seconds,
@@ -276,15 +305,17 @@ class RemoteUARTConnection:
             )
         ).is_ok:
             if (terminator_index := self._rx_buffer.find(terminator)) >= 0:
-                return Ok(
-                    self._take_bytes_out_of_rx_buffer(terminator_index + len(terminator)).decode(
-                        "UTF-8",
-                    ),
-                )
+                taken_data = self._take_bytes_out_of_rx_buffer(terminator_index + len(terminator))
+                logging.debug(f"read_string: Taken {taken_data!r} out of internal buffer")
+                return Ok(taken_data.decode("UTF-8"))
 
         # If `read_result` is not an integer, then it's an error which should be propagated.
         # Received data will stay in RX buffer until it's taken via `read_bytes` or some other
         # function.
+        logging.debug(
+            "read_string: An error happened while trying to fetch the string: "
+            f"{buffer_read_result}",
+        )
         return Err(buffer_read_result.unwrap_err())
 
     def _take_bytes_out_of_rx_buffer(self: RemoteUARTConnection, amount: int) -> bytes:
@@ -357,6 +388,7 @@ class RemoteUARTConnection:
         stty_command = " ".join(["stty", *self._generate_stty_arguments(config)])
         socat_command = " ".join(["socat", *self._generate_socat_arguments(config)])
 
+        logging.info(f"Configuring UART with {stty_command}")
         # In order to create socat bridge for UART, stty must be executed first.
         _, streams = self._ssh.execute(stty_command)
         # We can handler stty errors like that, but socat will block permanently if
@@ -366,12 +398,18 @@ class RemoteUARTConnection:
             if len(error_log) != 0:
                 raise UARTConnectionError(error_log)
 
+        logging.info("STTY executed successfully")
+        logging.info(f"Opening socat bridge with {socat_command}")
+
         # Store socat's PID for future cleanup
         self._socat_pid, streams = self._ssh.execute(socat_command)
+        logging.info(f"Socat running on remote machine with PID {self._socat_pid}")
 
     def _close_socat_bridge(self: RemoteUARTConnection) -> None:
         if self._socat_pid != 0:
+            logging.info("Killing socat on remote machine...")
             self._ssh.execute(f"kill {self._socat_pid}")
+            logging.info("Socat killed!")
             self._socat_pid = 0
 
     def __del__(self: RemoteUARTConnection) -> None:
