@@ -1,6 +1,7 @@
 """Helper script for Aerugo example that creates echo server on UART interface."""
 import logging
 import sys
+import time
 
 from calldwell import init_default_logger
 from calldwell.ssh_client import SSHClient
@@ -32,12 +33,14 @@ def main() -> None:
         logging.critical("UART connection couldn't be established, quitting...")
         sys.exit(1)
 
+    msg = "Hello, world!"
+    i = 0
+
     while True:
-        data_to_send = input("> ")
-        logging.info(f"Sending {data_to_send}")
-        uart.write_string(data_to_send + "\n")
-        response = uart.read_string(b"\n")
-        print(response)
+        uart.write_string(f"{msg} # {i}\n")
+        print(uart.read_string(b"\n"))
+        time.sleep(0.1)
+        i += 1
 
 
 if __name__ == "__main__":
